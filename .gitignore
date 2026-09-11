@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+
+# Working data — libri e output non vanno versionati
+libri-da-convertire/*
+!libri-da-convertire/.gitkeep
+libri-convertiti/*
+!libri-convertiti/.gitkeep
+file-originali-convertiti/*
+!file-originali-convertiti/.gitkeep
+tempor/
+.temp_pages/
+
+# Modelli scaricati da docling/onnxruntime
+*.onnx
+
+*.pdf
+*.epub
+.DS_Store
+EOF
