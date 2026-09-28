@@ -1,7 +1,11 @@
 # macOS
 .DS_Store
 
-# Python / uv
+# Editors
+.vscode/
+.idea/
+
+# Python
 .venv/
 __pycache__/
 *.pyc
