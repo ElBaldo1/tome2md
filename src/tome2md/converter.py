@@ -1,22 +1,34 @@
-"""Batch converter: EPUB/PDF books -> Obsidian-friendly Markdown vaults.
+"""Batch converter: books (PDF/EPUB/DOCX/ODT/RTF/HTML/FB2/MOBI/AZW3/TXT/MD) -> a
+chapter-split, Obsidian-friendly Markdown vault.
 
 Flow
 ----
-libri-da-convertire/<book>.(pdf|epub)
-    -> libri-convertiti/<book>/            one note per chapter + 00_Indice.md (+ assets/)
-    -> file-originali-convertiti/<book>.*  original archived on success
+<input-dir>/<book>.<ext>
+    -> <output-dir>/<book>/            one note per chapter + 00_Index.md (+ assets/)
+    -> <processed-dir>/<book>.*        original archived on success
 
-Engines (auto-selected, override with --engine):
-  * pdf-text : born-digital PDF. Chapter structure comes from the PDF bookmarks
-               (or font size, as fallback); spacing is rebuilt from glyph
-               geometry so tightly-justified lines don't lose their spaces.
-  * pdf-ocr  : scanned PDF -> Tesseract (ita+eng).
-  * epub     : Pandoc -> Markdown (real ATX headings, media extracted).
-  * epub-ocr : image-only "fake" EPUB -> Tesseract.
-  * docling  : opt-in (--engine docling). Best quality (LaTeX formulas, tables,
-               layout) but very slow on CPU: budget ~30-60 s per page.
+Default directory names are English (``to-convert/``, ``converted/``,
+``originals/``); if a legacy Italian-named folder already exists
+(``libri-da-convertire/`` etc.) it is used instead, so nothing breaks for
+existing users. Override any of the three with --input-dir/--output-dir/
+--processed-dir.
 
-Run with no arguments to process everything in libri-da-convertire/.
+Engines (auto-selected by extension, override with --engine):
+  * pdf-text : born-digital PDF. Chapter structure comes from the PDF
+               bookmarks (or font size, as fallback); spacing is rebuilt from
+               glyph geometry so tightly-justified lines don't lose spaces.
+  * pdf-ocr  : scanned PDF -> Tesseract, any language/combo (--ocr-lang).
+  * pandoc   : EPUB / DOCX / ODT / RTF / HTML / FB2 -> Pandoc -> Markdown
+               (real ATX headings, media extracted).
+  * calibre  : MOBI / AZW / AZW3 / LIT / PDB / LRF -> Calibre's
+               ``ebook-convert`` -> EPUB -> the pandoc engine above.
+  * epub-ocr : image-only "fake" EPUB -> Tesseract (automatic fallback).
+  * text     : TXT / MD, with multilingual "Chapter 3" / "Capitolo 3" /
+               "Chapitre 3" / "Kapitel 3" / ... heading detection.
+  * docling  : opt-in (--engine docling). Best quality (LaTeX formulas,
+               tables, layout) but slow on CPU: budget ~30-60 s per page.
+
+Run with no arguments to process everything found in the input directory.
 """
 
 from __future__ import annotations
@@ -27,6 +39,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import unicodedata
 import zipfile
 from collections import Counter, OrderedDict
@@ -43,19 +56,131 @@ try:
 except ImportError:  # optional, only needed for the OCR fallbacks
     pytesseract = None
 
+__version__ = "0.1.0"
+
 # --------------------------------------------------------------------------- #
-# Paths
+# UI messages (English default, Italian opt-in via --ui-lang it)
 # --------------------------------------------------------------------------- #
 
-BASE_DIR = Path(__file__).resolve().parent
-INPUT_DIR = BASE_DIR / "libri-da-convertire"
-OUTPUT_DIR = BASE_DIR / "libri-convertiti"
-PROCESSED_DIR = BASE_DIR / "file-originali-convertiti"
+UI_LANG = "en"
 
-for _d in (INPUT_DIR, OUTPUT_DIR, PROCESSED_DIR):
-    _d.mkdir(exist_ok=True)
+_MESSAGES: dict[str, dict[str, str]] = {
+    "no_files": {
+        "en": "No supported files found in '{input_dir}'.",
+        "it": "Nessun file supportato in '{input_dir}'.",
+    },
+    "found_files": {
+        "en": "Found {n} file(s).\n",
+        "it": "Trovati {n} file.\n",
+    },
+    "engine_ocr_pdf": {
+        "en": "  -> scanned PDF: Tesseract OCR ({lang})",
+        "it": "  -> PDF scansionato: OCR Tesseract ({lang})",
+    },
+    "engine_text_pdf": {
+        "en": "  -> born-digital PDF: text extraction + font-based structure",
+        "it": "  -> PDF vettoriale: estrazione testo + struttura da font",
+    },
+    "engine_calibre": {
+        "en": "  -> {ext} via Calibre (ebook-convert) -> EPUB",
+        "it": "  -> {ext} tramite Calibre (ebook-convert) -> EPUB",
+    },
+    "epub_images_fallback": {
+        "en": "  -> [WARNING] image-only EPUB: falling back to OCR",
+        "it": "  -> [WARNING] EPUB solo-immagini: passo a OCR",
+    },
+    "ok_chapters": {
+        "en": "[OK] {n} chapter(s) in {path}/",
+        "it": "[OK] {n} capitoli in {path}/",
+    },
+    "ok_archived": {
+        "en": "[OK] original archived: {path}\n",
+        "it": "[OK] originale archiviato: {path}\n",
+    },
+    "fail": {
+        "en": "[FAIL] {name}: {exc}\n",
+        "it": "[FAIL] {name}: {exc}\n",
+    },
+    "err_pandoc_missing": {
+        "en": "'pandoc' binary not found in PATH.",
+        "it": "Binario 'pandoc' non trovato nel PATH.",
+    },
+    "err_pandoc_failed": {
+        "en": "pandoc: {stderr}",
+        "it": "pandoc: {stderr}",
+    },
+    "err_tesseract_missing_pkg": {
+        "en": "pytesseract is not installed: cannot run OCR (pip install 'tome2md[ocr]').",
+        "it": "pytesseract non installato: impossibile fare OCR (pip install 'tome2md[ocr]').",
+    },
+    "err_tesseract_missing_bin": {
+        "en": "'tesseract' binary not found in PATH.",
+        "it": "Binario 'tesseract' non trovato nel PATH.",
+    },
+    "err_epub_no_images": {
+        "en": "No images found in the EPUB.",
+        "it": "Nessuna immagine trovata nell'EPUB.",
+    },
+    "err_pages_format": {
+        "en": "--pages requires the N-M format (e.g. 20-80)",
+        "it": "--pages richiede il formato N-M (es. 20-80)",
+    },
+    "err_ebook_convert_missing": {
+        "en": "'ebook-convert' (Calibre) not found in PATH: required for {ext} files. "
+        "Install Calibre: https://calibre-ebook.com/download",
+        "it": "Binario 'ebook-convert' (Calibre) non trovato nel PATH: necessario per i file "
+        "{ext}. Installa Calibre: https://calibre-ebook.com/download",
+    },
+    "err_ebook_convert_failed": {
+        "en": "ebook-convert: {stderr}",
+        "it": "ebook-convert: {stderr}",
+    },
+    "err_unsupported_format": {
+        "en": "Unsupported format: {ext}",
+        "it": "Formato non supportato: {ext}",
+    },
+    "err_empty_output": {
+        "en": "empty or too-short output",
+        "it": "output vuoto o troppo corto",
+    },
+}
 
-SUPPORTED_EXT = {".pdf", ".epub"}
+
+def t(key: str, **kwargs) -> str:
+    return _MESSAGES[key][UI_LANG].format(**kwargs)
+
+
+# --------------------------------------------------------------------------- #
+# Directories
+# --------------------------------------------------------------------------- #
+
+# New, English defaults. If the folder does not exist yet *and* the legacy
+# Italian-named one does, the legacy one is used instead -- so nothing breaks
+# for anyone already running this tool.
+_DIR_DEFAULTS = {
+    "input": ("to-convert", "libri-da-convertire"),
+    "output": ("converted", "libri-convertiti"),
+    "processed": ("originals", "file-originali-convertiti"),
+}
+
+
+def _resolve_dir(explicit: str | None, kind: str, base: Path) -> Path:
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    new_name, legacy_name = _DIR_DEFAULTS[kind]
+    new_path = base / new_name
+    legacy_path = base / legacy_name
+    if not new_path.exists() and legacy_path.exists():
+        return legacy_path
+    return new_path
+
+
+def _rel(p: Path, base: Path) -> Path:
+    try:
+        return p.relative_to(base)
+    except ValueError:
+        return p
+
 
 # --------------------------------------------------------------------------- #
 # Text normalization
@@ -100,11 +225,39 @@ def strip_title_noise(stem: str) -> str:
 def safe_filename(name: str, limit: int = 50) -> str:
     name = re.sub(r'[\\/*?:"<>|■◆▪·]+', "", name)
     name = re.sub(r"\s+", " ", name).strip(" .-")
-    return name[:limit].strip(" .-") or "senza-titolo"
+    return name[:limit].strip(" .-") or "untitled"
 
 
 # --------------------------------------------------------------------------- #
-# Chapter splitting  (shared by every engine – all of them emit ATX headings)
+# Multilingual chapter-heading detection (for plain text, which -- unlike PDF
+# bookmarks or Pandoc's real headings -- carries no structural signal at all)
+# --------------------------------------------------------------------------- #
+
+_CHAPTER_WORDS = (
+    "chapter", "capitolo", "cap", "chapitre", "kapitel", "capitulo", "capítulo",
+    "hoofdstuk", "rozdzial", "rozdział", "kapitola", "bolum", "bölüm", "kapitteli",
+)
+_CHAPTER_LINE_RE = re.compile(
+    r"^\s*(?:" + "|".join(_CHAPTER_WORDS) + r")\.?\s+([ivxlcdm]+|\d+)\b\s*[:.\-]?\s*(.*)$",
+    re.IGNORECASE,
+)
+
+
+def promote_chapter_lines(text: str) -> str:
+    """Turn 'Chapter 3: Title' / 'Capitolo 3' style lines into ATX H1 headings.
+
+    Only touches lines matching the pattern; a line already starting with
+    ``#`` never matches, so running this on text that already has real ATX
+    headings (e.g. Markdown input) is a safe no-op for those lines.
+    """
+    out = []
+    for line in text.splitlines():
+        out.append(f"# {line.strip()}" if _CHAPTER_LINE_RE.match(line) else line)
+    return "\n".join(out)
+
+
+# --------------------------------------------------------------------------- #
+# Chapter splitting  (shared by every engine — all of them emit ATX headings)
 # --------------------------------------------------------------------------- #
 
 _H_RE = re.compile(r"^(#{1,6})\s+(\S.*?)\s*#*$")
@@ -126,9 +279,9 @@ def split_into_chapters(markdown: str, book_title: str, book_folder: Path, *, mi
 
     sections: list[tuple[str, list[str]]] = []
     if split_level is None:
-        sections.append(("Testo completo", lines))
+        sections.append(("Full text", lines))
     else:
-        current_title, buf = "Preambolo", []
+        current_title, buf = "Preamble", []
         for ln in lines:
             m = _H_RE.match(ln)
             if m and len(m.group(1)) == split_level:
@@ -151,9 +304,9 @@ def split_into_chapters(markdown: str, book_title: str, book_folder: Path, *, mi
         else:
             merged.append((title, body))
     if not merged:
-        merged = [("Testo completo", markdown.strip())]
+        merged = [("Full text", markdown.strip())]
 
-    index = [f"# {book_title}", "", "## Indice dei capitoli", ""]
+    index = [f"# {book_title}", "", "## Table of contents", ""]
     for idx, (title, body) in enumerate(merged, start=1):
         slug = safe_filename(title)
         note_name = f"{idx:02d}_{slug}"
@@ -163,8 +316,8 @@ def split_into_chapters(markdown: str, book_title: str, book_folder: Path, *, mi
         )
         index.append(f"- [[{note_name}|{title}]]")
 
-    (book_folder / "00_Indice.md").write_text(
-        _frontmatter(book_title, "Indice", 0) + "\n".join(index) + "\n", encoding="utf-8"
+    (book_folder / "00_Index.md").write_text(
+        _frontmatter(book_title, "Index", 0) + "\n".join(index) + "\n", encoding="utf-8"
     )
     return len(merged)
 
@@ -223,13 +376,13 @@ def _rebuild_line(chars: list[tuple[float, float, str]], factor: float = 0.25) -
 def _join_block(texts: list[str]) -> str:
     """Join the lines of a paragraph, healing words hyphenated at the line break."""
     buf = ""
-    for t in texts:
+    for t_ in texts:
         if not buf:
-            buf = t
-        elif re.search(r"[A-Za-zà-ÿ]-$", buf) and t[:1].islower():
-            buf = buf[:-1] + t
+            buf = t_
+        elif re.search(r"[A-Za-zà-ÿ]-$", buf) and t_[:1].islower():
+            buf = buf[:-1] + t_
         else:
-            buf += " " + t
+            buf += " " + t_
     return buf
 
 
@@ -279,7 +432,7 @@ def _collect_running_headers(doc, sample_pages) -> set[str]:
             if (y < h * 0.11 or y > h * 0.92) and not text.isdigit():
                 seen[text.lower()] += 1
     threshold = max(6, int(len(sample_pages) * 0.05))
-    return {t for t, c in seen.items() if c >= threshold}
+    return {t_ for t_, c in seen.items() if c >= threshold}
 
 
 _BOILERPLATE = {"this page intentionally left blank"}
@@ -319,7 +472,7 @@ def pdf_text_to_markdown(doc, assets_dir: Path, *, book_title: str, page_range=N
         for img in doc[i].get_images(full=True):
             xref_pages[img[0]] += 1
 
-    for i in tqdm(page_list, desc="PDF -> Markdown", unit="pag"):
+    for i in tqdm(page_list, desc="PDF -> Markdown", unit="page"):
         page = doc[i]
         h = page.rect.height
 
@@ -391,23 +544,54 @@ def pdf_text_to_markdown(doc, assets_dir: Path, *, book_title: str, page_range=N
 
 
 # --------------------------------------------------------------------------- #
-# Engine: OCR  (scanned PDF or image-only EPUB)
+# Engine: OCR  (scanned PDF or image-only EPUB) -- any Tesseract language/combo
 # --------------------------------------------------------------------------- #
 
-_TESS_CONFIG = r"--oem 1 -l ita+eng"
+_PREFERRED_AUTO_LANGS = ["eng", "ita", "fra", "deu", "spa", "por"]
 
 
-def _ocr_images(images: list[Image.Image], workers: int) -> str:
-    if pytesseract is None:
-        raise RuntimeError("pytesseract non installato: impossibile fare OCR.")
+def _installed_tesseract_langs() -> set[str]:
     if not shutil.which("tesseract"):
-        raise RuntimeError("Binario 'tesseract' non trovato nel PATH.")
+        return set()
+    try:
+        proc = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True)
+        return {
+            ln.strip()
+            for ln in proc.stdout.splitlines()
+            if ln.strip() and not ln.lower().startswith("list of")
+        }
+    except Exception:
+        return set()
+
+
+def resolve_ocr_lang(spec: str) -> str:
+    """Turn an --ocr-lang value into a Tesseract -l argument.
+
+    Any Tesseract-supported language code (or ``+``-joined combo, e.g.
+    ``eng+ita+fra``) is accepted as-is. ``auto`` unions the language packs
+    actually installed on this machine from a curated common-language list,
+    so the same command works on any book without guessing beforehand.
+    """
+    if spec != "auto":
+        return spec
+    installed = _installed_tesseract_langs()
+    chosen = [lg for lg in _PREFERRED_AUTO_LANGS if lg in installed] or ["eng"]
+    return "+".join(chosen)
+
+
+def _ocr_images(images: list[Image.Image], workers: int, lang: str) -> str:
+    if pytesseract is None:
+        raise RuntimeError(t("err_tesseract_missing_pkg"))
+    if not shutil.which("tesseract"):
+        raise RuntimeError(t("err_tesseract_missing_bin"))
+
+    config = f"--oem 1 -l {lang}"
 
     def run(img):
-        return pytesseract.image_to_string(img, config=_TESS_CONFIG)
+        return pytesseract.image_to_string(img, config=config)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        pages = list(tqdm(pool.map(run, images), total=len(images), desc="OCR", unit="pag"))
+        pages = list(tqdm(pool.map(run, images), total=len(images), desc="OCR", unit="page"))
     return "\n\n".join(pages)
 
 
@@ -419,47 +603,91 @@ def _grayscale_downscale(img: Image.Image, max_width: int = 1600) -> Image.Image
     return img
 
 
-def pdf_ocr_to_markdown(doc, *, dpi: int, workers: int, page_range=None) -> str:
+def pdf_ocr_to_markdown(doc, *, dpi: int, workers: int, lang: str, page_range=None) -> str:
     rng = range(*page_range) if page_range else range(len(doc))
     images = []
-    for i in tqdm(rng, desc="Rendering PDF", unit="pag"):
+    for i in tqdm(rng, desc="Rendering PDF", unit="page"):
         pix = doc[i].get_pixmap(dpi=dpi)
         images.append(_grayscale_downscale(Image.frombytes("RGB", [pix.width, pix.height], pix.samples)))
-    return normalize_text(_ocr_images(images, workers))
+    return normalize_text(_ocr_images(images, workers, lang))
 
 
-def epub_images_to_markdown(epub_path: Path, workers: int) -> str:
+def epub_images_to_markdown(epub_path: Path, workers: int, lang: str) -> str:
     images = []
     with zipfile.ZipFile(epub_path) as archive:
         names = sorted(f for f in archive.namelist() if f.lower().endswith((".png", ".jpg", ".jpeg")))
-        for name in tqdm(names, desc="Estrazione immagini EPUB", unit="img"):
+        for name in tqdm(names, desc="Extracting EPUB images", unit="img"):
             images.append(_grayscale_downscale(Image.open(io.BytesIO(archive.read(name)))))
     if not images:
-        raise RuntimeError("Nessuna immagine trovata nell'EPUB.")
-    return normalize_text(_ocr_images(images, workers))
+        raise RuntimeError(t("err_epub_no_images"))
+    return normalize_text(_ocr_images(images, workers, lang))
 
 
 # --------------------------------------------------------------------------- #
-# Engine: EPUB via Pandoc
+# Engine: Pandoc  (EPUB / DOCX / ODT / RTF / HTML / FB2)
 # --------------------------------------------------------------------------- #
 
+_PANDOC_FORMATS = {
+    ".epub": "epub",
+    ".docx": "docx",
+    ".odt": "odt",
+    ".rtf": "rtf",
+    ".html": "html",
+    ".htm": "html",
+    ".fb2": "fb2",
+}
 
-def epub_to_markdown(epub_path: Path, assets_dir: Path) -> str:
+
+def pandoc_to_markdown(src: Path, input_format: str, assets_dir: Path) -> str:
     if not shutil.which("pandoc"):
-        raise RuntimeError("Binario 'pandoc' non trovato nel PATH.")
+        raise RuntimeError(t("err_pandoc_missing"))
     assets_dir.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
         [
-            "pandoc", str(epub_path),
-            "-f", "epub", "-t", "gfm",
+            "pandoc", str(src),
+            "-f", input_format, "-t", "gfm",
             "--wrap=none", "--markdown-headings=atx",
             f"--extract-media={assets_dir}",
         ],
         capture_output=True, text=True,
     )
     if proc.returncode != 0:
-        raise RuntimeError(f"pandoc: {proc.stderr.strip()[:400]}")
+        raise RuntimeError(t("err_pandoc_failed", stderr=proc.stderr.strip()[:400]))
     return normalize_text(proc.stdout)
+
+
+def epub_to_markdown(epub_path: Path, assets_dir: Path) -> str:
+    return pandoc_to_markdown(epub_path, "epub", assets_dir)
+
+
+# --------------------------------------------------------------------------- #
+# Engine: Calibre  (MOBI / AZW / AZW3 / LIT / PDB / LRF -> EPUB -> Pandoc)
+# --------------------------------------------------------------------------- #
+
+_CALIBRE_EXT = {".mobi", ".azw", ".azw3", ".lit", ".pdb", ".lrf"}
+
+
+def calibre_to_epub(src: Path, tmp_dir: Path) -> Path:
+    if not shutil.which("ebook-convert"):
+        raise RuntimeError(t("err_ebook_convert_missing", ext=src.suffix))
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    dest = tmp_dir / (safe_filename(src.stem, limit=80) + ".epub")
+    proc = subprocess.run(["ebook-convert", str(src), str(dest)], capture_output=True, text=True)
+    if proc.returncode != 0 or not dest.exists():
+        raise RuntimeError(t("err_ebook_convert_failed", stderr=proc.stderr.strip()[:400]))
+    return dest
+
+
+# --------------------------------------------------------------------------- #
+# Engine: plain text  (TXT / MD)
+# --------------------------------------------------------------------------- #
+
+_TEXT_EXT = {".txt", ".md", ".markdown"}
+
+
+def text_to_markdown(src: Path) -> str:
+    raw = src.read_text(encoding="utf-8", errors="replace")
+    return normalize_text(promote_chapter_lines(raw))
 
 
 # --------------------------------------------------------------------------- #
@@ -496,6 +724,8 @@ def docling_to_markdown(src: Path, assets_dir: Path, *, formulas: bool, page_ran
 # Orchestration
 # --------------------------------------------------------------------------- #
 
+SUPPORTED_EXT = {".pdf"} | set(_PANDOC_FORMATS) | _CALIBRE_EXT | _TEXT_EXT
+
 
 def _looks_born_digital(doc, page_range=None) -> bool:
     rng = list(range(*page_range)) if page_range else range(len(doc))
@@ -517,19 +747,30 @@ def convert_file(src: Path, book_folder: Path, book_title: str, args) -> str:
         with pymupdf.open(str(src)) as doc:
             scanned = args.engine == "ocr" or not _looks_born_digital(doc, page_range)
             if scanned:
-                print("  -> PDF scansionato: OCR Tesseract")
-                return pdf_ocr_to_markdown(doc, dpi=args.dpi, workers=args.workers, page_range=page_range)
-            print("  -> PDF vettoriale: estrazione testo + struttura da font")
+                lang = resolve_ocr_lang(args.ocr_lang)
+                print(t("engine_ocr_pdf", lang=lang))
+                return pdf_ocr_to_markdown(doc, dpi=args.dpi, workers=args.workers, lang=lang, page_range=page_range)
+            print(t("engine_text_pdf"))
             return pdf_text_to_markdown(doc, assets_dir, book_title=book_title, page_range=page_range)
 
-    if ext == ".epub":
-        md = epub_to_markdown(src, assets_dir)
-        if len(md) < 1000:
-            print("  -> [WARNING] EPUB solo-immagini: passo a OCR")
-            return epub_images_to_markdown(src, args.workers)
+    if ext in _CALIBRE_EXT:
+        print(t("engine_calibre", ext=ext))
+        with tempfile.TemporaryDirectory() as tmp:
+            epub_path = calibre_to_epub(src, Path(tmp))
+            return epub_to_markdown(epub_path, assets_dir)
+
+    if ext in _PANDOC_FORMATS:
+        md = pandoc_to_markdown(src, _PANDOC_FORMATS[ext], assets_dir)
+        if ext == ".epub" and len(md) < 1000:
+            print(t("epub_images_fallback"))
+            lang = resolve_ocr_lang(args.ocr_lang)
+            return epub_images_to_markdown(src, args.workers, lang)
         return md
 
-    raise RuntimeError(f"Formato non supportato: {ext}")
+    if ext in _TEXT_EXT:
+        return text_to_markdown(src)
+
+    raise RuntimeError(t("err_unsupported_format", ext=ext))
 
 
 def _parse_pages(spec: str | None):
@@ -537,61 +778,79 @@ def _parse_pages(spec: str | None):
         return None
     m = re.fullmatch(r"\s*(\d+)\s*-\s*(\d+)\s*", spec)
     if not m:
-        raise SystemExit("--pages richiede il formato N-M (es. 20-80)")
+        raise SystemExit(t("err_pages_format"))
     return (int(m.group(1)) - 1, int(m.group(2)))
 
 
-def _archive(src: Path) -> Path:
-    dest = PROCESSED_DIR / src.name
+def _archive(src: Path, processed_dir: Path) -> Path:
+    dest = processed_dir / src.name
     if dest.exists():
-        dest = PROCESSED_DIR / f"{src.stem}_{date.today().isoformat()}{src.suffix}"
+        dest = processed_dir / f"{src.stem}_{date.today().isoformat()}{src.suffix}"
     shutil.move(str(src), str(dest))
     return dest
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--version", action="version", version=f"tome2md {__version__}")
+    parser.add_argument("--input-dir", metavar="DIR", help="folder to read books from (default: to-convert/)")
+    parser.add_argument("--output-dir", metavar="DIR", help="folder to write the Markdown vault to (default: converted/)")
+    parser.add_argument("--processed-dir", metavar="DIR", help="folder to archive originals into (default: originals/)")
     parser.add_argument("--engine", choices=["auto", "ocr", "docling"], default="auto")
-    parser.add_argument("--pages", metavar="N-M", help="converti solo l'intervallo di pagine (test)")
-    parser.add_argument("--formulas", action="store_true", help="docling: riconosci le formule in LaTeX (lento)")
-    parser.add_argument("--dpi", type=int, default=200, help="risoluzione rendering per l'OCR")
-    parser.add_argument("--workers", type=int, default=4, help="thread paralleli per l'OCR")
-    parser.add_argument("--min-words", type=int, default=120, help="soglia per accorpare sezioni brevi")
-    parser.add_argument("--raw-title", action="store_true", help="non ripulire il nome file dai suffissi mirror")
-    parser.add_argument("--keep-going", action="store_true", help="non fermarti al primo errore")
-    parser.add_argument("--no-archive", action="store_true", help="non spostare l'originale a fine conversione")
+    parser.add_argument("--ocr-lang", default="ita+eng", metavar="LANG[+LANG...]|auto",
+                         help="Tesseract language(s) for OCR, e.g. 'eng', 'eng+fra', or 'auto' "
+                              "to use every installed language pack from a common preset")
+    parser.add_argument("--ui-lang", choices=["en", "it"], default="en", help="language of console messages")
+    parser.add_argument("--pages", metavar="N-M", help="convert only this page range (for quick tests)")
+    parser.add_argument("--formulas", action="store_true", help="docling: recognize formulas as LaTeX (slow)")
+    parser.add_argument("--dpi", type=int, default=200, help="render resolution for OCR")
+    parser.add_argument("--workers", type=int, default=4, help="parallel threads for OCR")
+    parser.add_argument("--min-words", type=int, default=120, help="threshold to merge short sections forward")
+    parser.add_argument("--raw-title", action="store_true", help="don't strip mirror-site suffixes from the filename")
+    parser.add_argument("--keep-going", action="store_true", help="don't stop at the first error")
+    parser.add_argument("--no-archive", action="store_true", help="don't move the original after conversion")
     args = parser.parse_args(argv)
 
-    files = sorted(f for f in INPUT_DIR.iterdir() if f.is_file() and not f.name.startswith("."))
+    global UI_LANG
+    UI_LANG = args.ui_lang
+
+    base = Path.cwd()
+    input_dir = _resolve_dir(args.input_dir, "input", base)
+    output_dir = _resolve_dir(args.output_dir, "output", base)
+    processed_dir = _resolve_dir(args.processed_dir, "processed", base)
+    for d in (input_dir, output_dir, processed_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    files = sorted(f for f in input_dir.iterdir() if f.is_file() and not f.name.startswith("."))
     files = [f for f in files if f.suffix.lower() in SUPPORTED_EXT]
     if not files:
-        print("Nessun file .pdf/.epub in 'libri-da-convertire'.")
+        print(t("no_files", input_dir=_rel(input_dir, base)))
         return 0
 
-    print(f"Trovati {len(files)} file.\n")
+    print(t("found_files", n=len(files)))
     failures = 0
     for src in files:
         if not src.exists():  # moved/renamed between listing and now
             continue
         book_title = src.stem if args.raw_title else strip_title_noise(src.stem)
-        book_folder = OUTPUT_DIR / safe_filename(book_title, limit=120)
+        book_folder = output_dir / safe_filename(book_title, limit=120)
         print(f"### {src.name}")
         if book_folder.exists():
             shutil.rmtree(book_folder)  # start clean: no stale notes from a previous run
         try:
             markdown = convert_file(src, book_folder, book_title, args)
             if len(markdown.strip()) < 200:
-                raise RuntimeError("output vuoto o troppo corto")
+                raise RuntimeError(t("err_empty_output"))
             n = split_into_chapters(markdown, book_title, book_folder, min_words=args.min_words)
-            dest = None if args.no_archive else _archive(src)
-            print(f"[OK] {n} capitoli in {book_folder.relative_to(BASE_DIR)}/")
+            dest = None if args.no_archive else _archive(src, processed_dir)
+            print(t("ok_chapters", n=n, path=_rel(book_folder, base)))
             if dest:
-                print(f"[OK] originale archiviato: {dest.relative_to(BASE_DIR)}\n")
+                print(t("ok_archived", path=_rel(dest, base)))
         except Exception as exc:  # noqa: BLE001 - report and continue
             failures += 1
             if book_folder.exists():
                 shutil.rmtree(book_folder, ignore_errors=True)
-            print(f"[FAIL] {src.name}: {exc}\n")
+            print(t("fail", name=src.name, exc=exc))
             if not args.keep_going:
                 return 1
     return 1 if failures else 0
