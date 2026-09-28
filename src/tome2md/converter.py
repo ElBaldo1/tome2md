@@ -10,11 +10,13 @@ Flow
 Default directories are ``to-convert/``, ``converted/``, and ``originals/``.
 Override any of them with --input-dir/--output-dir/--processed-dir.
 
-Engines (auto-selected by extension, override with --engine):
+Engines (auto-selected by file extension; --engine only forces "ocr" or
+"docling", it does not let you pick the extension-bound engines below):
   * pdf-text : born-digital PDF. Chapter structure comes from the PDF
                bookmarks (or font size, as fallback); spacing is rebuilt from
                glyph geometry so tightly-justified lines don't lose spaces.
   * pdf-ocr  : scanned PDF -> Tesseract, any language/combo (--ocr-lang).
+               Force it on a born-digital PDF with --engine ocr.
   * pandoc   : EPUB / DOCX / ODT / RTF / HTML / FB2 -> Pandoc -> Markdown
                (real ATX headings, media extracted).
   * calibre  : MOBI / AZW / AZW3 / LIT / PDB / LRF -> Calibre's
@@ -190,7 +192,7 @@ def promote_chapter_lines(text: str) -> str:
 # Chapter splitting  (shared by every engine — all of them emit ATX headings)
 # --------------------------------------------------------------------------- #
 
-_H_RE = re.compile(r"^(#{1,6})\s+(\S.*?)\s*#*$")
+_H_RE = re.compile(r"^(#{1,6})\s+(\S.*?)(?:\s+#+)?\s*$")
 
 
 def split_into_chapters(markdown: str, book_title: str, book_folder: Path, *, min_words: int) -> int:
@@ -274,9 +276,10 @@ _SUBSUB = re.compile(r"^\s*\d+\.\d+\.\d+\b")
 _SECTION = re.compile(r"^\s*\d+\.\d+\b")
 
 
-def _dominant_size(doc, sample: int = 60) -> float:
+def _dominant_size(doc, pages: list[int] | None = None, sample: int = 60) -> float:
     weight: Counter[float] = Counter()
-    for i in range(min(sample, len(doc))):
+    page_ids = pages[:sample] if pages is not None else range(min(sample, len(doc)))
+    for i in page_ids:
         for block in doc[i].get_text("dict").get("blocks", []):
             for line in block.get("lines", []):
                 for span in line.get("spans", []):
@@ -387,9 +390,9 @@ def _toc_headings_by_page(doc, valid_pages: set[int]) -> dict[int, list[str]]:
 
 
 def pdf_text_to_markdown(doc, assets_dir: Path, *, book_title: str, page_range=None) -> str:
-    body_size = _dominant_size(doc)
     rng = range(*page_range) if page_range else range(len(doc))
     page_list = list(rng)
+    body_size = _dominant_size(doc, page_list)
     headers = _collect_running_headers(doc, page_list[:400])
     title_norm = re.sub(r"\s+", " ", book_title).strip().lower()
     toc_headings = _toc_headings_by_page(doc, set(page_list))
@@ -709,13 +712,21 @@ def _parse_pages(spec: str | None):
     m = re.fullmatch(r"\s*(\d+)\s*-\s*(\d+)\s*", spec)
     if not m:
         raise SystemExit(t("err_pages_format"))
-    return (int(m.group(1)) - 1, int(m.group(2)))
+    start, end = int(m.group(1)), int(m.group(2))
+    if start < 1 or end < start:
+        raise SystemExit(t("err_pages_format"))
+    return (start - 1, end)
 
 
 def _archive(src: Path, processed_dir: Path) -> Path:
     dest = processed_dir / src.name
     if dest.exists():
-        dest = processed_dir / f"{src.stem}_{date.today().isoformat()}{src.suffix}"
+        today = date.today().isoformat()
+        dest = processed_dir / f"{src.stem}_{today}{src.suffix}"
+        n = 2
+        while dest.exists():
+            dest = processed_dir / f"{src.stem}_{today}_{n}{src.suffix}"
+            n += 1
     shutil.move(str(src), str(dest))
     return dest
 
@@ -760,11 +771,21 @@ def main(argv=None) -> int:
 
     print(t("found_files", n=len(files)))
     failures = 0
+    used_folders: set[Path] = set()
     for src in files:
         if not src.exists():  # moved/renamed between listing and now
             continue
         book_title = src.stem if args.raw_title else strip_title_noise(src.stem)
-        book_folder = output_dir / safe_filename(book_title, limit=120)
+        base_name = safe_filename(book_title, limit=120)
+        book_folder = output_dir / base_name
+        if book_folder in used_folders:
+            # another book converted earlier in this run already claimed this
+            # name - disambiguate instead of overwriting its output below
+            n = 2
+            while (output_dir / f"{base_name}-{n}") in used_folders:
+                n += 1
+            book_folder = output_dir / f"{base_name}-{n}"
+        used_folders.add(book_folder)
         print(f"### {src.name}")
         if book_folder.exists():
             shutil.rmtree(book_folder)  # start clean: no stale notes from a previous run

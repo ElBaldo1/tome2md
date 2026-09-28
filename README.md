@@ -113,21 +113,76 @@ switch console messages to Italian; folder names remain English.
 
 ---
 
-## Quickstart
+## Installation (local, step by step)
+
+`tome2md` is not published as a package yet, so it currently only runs from a
+local clone of this repo. Here's the full setup from zero:
+
+**1. Prerequisites**
+
+- Python 3.10 or newer (`python3 --version` to check)
+- [git](https://git-scm.com/downloads)
+
+**2. Clone the repository**
 
 ```bash
-# with uv (recommended)
-uv tool install tome2md
-# or with pip
-pip install tome2md
+git clone https://github.com/ElBaldo1/tome2md.git
+cd tome2md
+```
 
+**3. Create and activate a virtual environment**
+
+This keeps `tome2md`'s dependencies isolated from the rest of your system.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate        # on Windows: .venv\Scripts\activate
+```
+
+You'll need to run the `source` command again in every new terminal session
+before using `tome2md` (or activate it once from your shell profile).
+
+**4. Install the package**
+
+```bash
+pip install -e .
+```
+
+This installs `tome2md` in "editable" mode — pulling in only its required
+Python dependencies (`pymupdf`, `pillow`, `tqdm`) — and gives you the
+`tome2md` command inside the virtual environment.
+
+**5. Install the external tools you need**
+
+`tome2md` shells out to a few external programs depending on the input
+format. Install only what you'll actually use — `tome2md` tells you exactly
+what's missing and how to install it if you hit a format that needs it:
+
+| Tool | Needed for | Install |
+|---|---|---|
+| [Pandoc](https://pandoc.org/installing.html) | EPUB / DOCX / ODT / RTF / HTML / FB2 | `brew install pandoc` (macOS) / `apt install pandoc` (Linux) |
+| [Tesseract](https://github.com/tesseract-ocr/tesseract) + `pip install '.[ocr]'` | scanned PDFs, image-only EPUBs | `brew install tesseract tesseract-lang` / `apt install tesseract-ocr` |
+| [Calibre](https://calibre-ebook.com/download) | MOBI / AZW / AZW3 / LIT / PDB / LRF | official installer (provides `ebook-convert`) |
+| `pip install '.[docling]'` | `--engine docling` (max-fidelity mode) | — |
+
+To install everything at once (OCR + docling extras), run instead of step 4:
+
+```bash
+pip install -e '.[all]'
+```
+
+**6. Add your books and run the conversion**
+
+```bash
 mkdir to-convert && cp ~/Books/*.epub ~/Books/*.pdf to-convert/
 tome2md
 ```
 
-That's it — every supported file in `to-convert/` becomes a chapter-split
-vault under `converted/`, and the original is archived to `originals/` once
-the conversion succeeds.
+Every supported file in `to-convert/` becomes a chapter-split vault under
+`converted/`, and the original is archived to `originals/` once the
+conversion succeeds.
+
+**7. Useful flags**
 
 ```bash
 tome2md --pages 20-80              # quick test on a page range
@@ -138,19 +193,6 @@ tome2md --keep-going               # don't stop the batch on the first failure
 ```
 
 Run `tome2md --help` for the full flag reference.
-
-## Installing the external tools
-
-`pymupdf`, `pillow` and `tqdm` are installed automatically. Everything else is
-an **optional, soft dependency** — `tome2md` tells you exactly what's missing
-and how to install it if you hit a format that needs it:
-
-| Tool | Needed for | Install |
-|---|---|---|
-| [Pandoc](https://pandoc.org/installing.html) | EPUB / DOCX / ODT / RTF / HTML / FB2 | `brew install pandoc` / `apt install pandoc` |
-| [Tesseract](https://github.com/tesseract-ocr/tesseract) + `pip install 'tome2md[ocr]'` | scanned PDFs, image-only EPUBs | `brew install tesseract tesseract-lang` / `apt install tesseract-ocr` |
-| [Calibre](https://calibre-ebook.com/download) | MOBI / AZW / AZW3 / LIT / PDB / LRF | official installer (provides `ebook-convert`) |
-| `pip install 'tome2md[docling]'` | `--engine docling` (max-fidelity mode) | — |
 
 ## Repository structure
 
