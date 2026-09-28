@@ -7,13 +7,28 @@ engine's output passes through, so a regression here silently corrupts
 every conversion.
 """
 
+import tome2md.converter as converter
 from tome2md.converter import (
+    _resolve_dir,
     normalize_text,
     promote_chapter_lines,
     resolve_ocr_lang,
     safe_filename,
     strip_title_noise,
+    t,
 )
+
+
+def test_resolve_dir_uses_english_defaults(tmp_path):
+    assert _resolve_dir(None, "input", tmp_path) == tmp_path / "to-convert"
+    assert _resolve_dir(None, "output", tmp_path) == tmp_path / "converted"
+    assert _resolve_dir(None, "processed", tmp_path) == tmp_path / "originals"
+
+
+def test_console_messages_default_to_english_and_support_italian(monkeypatch):
+    assert t("found_files", n=2) == "Found 2 file(s).\n"
+    monkeypatch.setattr(converter, "UI_LANG", "it")
+    assert t("found_files", n=2) == "Trovati 2 file.\n"
 
 
 def test_normalize_text_expands_ligatures():
@@ -70,7 +85,7 @@ def test_promote_chapter_lines_english():
     assert out.splitlines()[0].startswith("# Chapter 3")
 
 
-def test_promote_chapter_lines_italian():
+def test_promote_chapter_lines_supports_italian_content():
     out = promote_chapter_lines("Capitolo 4 - Il ritorno\nTesto.")
     assert out.splitlines()[0].startswith("# Capitolo 4")
 

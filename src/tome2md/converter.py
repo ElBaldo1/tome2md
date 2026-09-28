@@ -7,11 +7,8 @@ Flow
     -> <output-dir>/<book>/            one note per chapter + 00_Index.md (+ assets/)
     -> <processed-dir>/<book>.*        original archived on success
 
-Default directory names are English (``to-convert/``, ``converted/``,
-``originals/``); if a legacy Italian-named folder already exists
-(``libri-da-convertire/`` etc.) it is used instead, so nothing breaks for
-existing users. Override any of the three with --input-dir/--output-dir/
---processed-dir.
+Default directories are ``to-convert/``, ``converted/``, and ``originals/``.
+Override any of them with --input-dir/--output-dir/--processed-dir.
 
 Engines (auto-selected by extension, override with --engine):
   * pdf-text : born-digital PDF. Chapter structure comes from the PDF
@@ -59,90 +56,31 @@ except ImportError:  # optional, only needed for the OCR fallbacks
 __version__ = "0.1.0"
 
 # --------------------------------------------------------------------------- #
-# UI messages (English default, Italian opt-in via --ui-lang it)
+# Console messages (English by default; Italian is an opt-in CLI language)
 # --------------------------------------------------------------------------- #
 
 UI_LANG = "en"
 
 _MESSAGES: dict[str, dict[str, str]] = {
-    "no_files": {
-        "en": "No supported files found in '{input_dir}'.",
-        "it": "Nessun file supportato in '{input_dir}'.",
-    },
-    "found_files": {
-        "en": "Found {n} file(s).\n",
-        "it": "Trovati {n} file.\n",
-    },
-    "engine_ocr_pdf": {
-        "en": "  -> scanned PDF: Tesseract OCR ({lang})",
-        "it": "  -> PDF scansionato: OCR Tesseract ({lang})",
-    },
-    "engine_text_pdf": {
-        "en": "  -> born-digital PDF: text extraction + font-based structure",
-        "it": "  -> PDF vettoriale: estrazione testo + struttura da font",
-    },
-    "engine_calibre": {
-        "en": "  -> {ext} via Calibre (ebook-convert) -> EPUB",
-        "it": "  -> {ext} tramite Calibre (ebook-convert) -> EPUB",
-    },
-    "epub_images_fallback": {
-        "en": "  -> [WARNING] image-only EPUB: falling back to OCR",
-        "it": "  -> [WARNING] EPUB solo-immagini: passo a OCR",
-    },
-    "ok_chapters": {
-        "en": "[OK] {n} chapter(s) in {path}/",
-        "it": "[OK] {n} capitoli in {path}/",
-    },
-    "ok_archived": {
-        "en": "[OK] original archived: {path}\n",
-        "it": "[OK] originale archiviato: {path}\n",
-    },
-    "fail": {
-        "en": "[FAIL] {name}: {exc}\n",
-        "it": "[FAIL] {name}: {exc}\n",
-    },
-    "err_pandoc_missing": {
-        "en": "'pandoc' binary not found in PATH.",
-        "it": "Binario 'pandoc' non trovato nel PATH.",
-    },
-    "err_pandoc_failed": {
-        "en": "pandoc: {stderr}",
-        "it": "pandoc: {stderr}",
-    },
-    "err_tesseract_missing_pkg": {
-        "en": "pytesseract is not installed: cannot run OCR (pip install 'tome2md[ocr]').",
-        "it": "pytesseract non installato: impossibile fare OCR (pip install 'tome2md[ocr]').",
-    },
-    "err_tesseract_missing_bin": {
-        "en": "'tesseract' binary not found in PATH.",
-        "it": "Binario 'tesseract' non trovato nel PATH.",
-    },
-    "err_epub_no_images": {
-        "en": "No images found in the EPUB.",
-        "it": "Nessuna immagine trovata nell'EPUB.",
-    },
-    "err_pages_format": {
-        "en": "--pages requires the N-M format (e.g. 20-80)",
-        "it": "--pages richiede il formato N-M (es. 20-80)",
-    },
-    "err_ebook_convert_missing": {
-        "en": "'ebook-convert' (Calibre) not found in PATH: required for {ext} files. "
-        "Install Calibre: https://calibre-ebook.com/download",
-        "it": "Binario 'ebook-convert' (Calibre) non trovato nel PATH: necessario per i file "
-        "{ext}. Installa Calibre: https://calibre-ebook.com/download",
-    },
-    "err_ebook_convert_failed": {
-        "en": "ebook-convert: {stderr}",
-        "it": "ebook-convert: {stderr}",
-    },
-    "err_unsupported_format": {
-        "en": "Unsupported format: {ext}",
-        "it": "Formato non supportato: {ext}",
-    },
-    "err_empty_output": {
-        "en": "empty or too-short output",
-        "it": "output vuoto o troppo corto",
-    },
+    "no_files": {"en": "No supported files found in '{input_dir}'.", "it": "Nessun file supportato in '{input_dir}'."},
+    "found_files": {"en": "Found {n} file(s).\n", "it": "Trovati {n} file.\n"},
+    "engine_ocr_pdf": {"en": "  -> scanned PDF: Tesseract OCR ({lang})", "it": "  -> PDF scansionato: OCR Tesseract ({lang})"},
+    "engine_text_pdf": {"en": "  -> born-digital PDF: text extraction + font-based structure", "it": "  -> PDF vettoriale: estrazione testo + struttura da font"},
+    "engine_calibre": {"en": "  -> {ext} via Calibre (ebook-convert) -> EPUB", "it": "  -> {ext} tramite Calibre (ebook-convert) -> EPUB"},
+    "epub_images_fallback": {"en": "  -> [WARNING] image-only EPUB: falling back to OCR", "it": "  -> [WARNING] EPUB solo-immagini: passo a OCR"},
+    "ok_chapters": {"en": "[OK] {n} chapter(s) in {path}/", "it": "[OK] {n} capitoli in {path}/"},
+    "ok_archived": {"en": "[OK] original archived: {path}\n", "it": "[OK] originale archiviato: {path}\n"},
+    "fail": {"en": "[FAIL] {name}: {exc}\n", "it": "[FAIL] {name}: {exc}\n"},
+    "err_pandoc_missing": {"en": "'pandoc' binary not found in PATH.", "it": "Binario 'pandoc' non trovato nel PATH."},
+    "err_pandoc_failed": {"en": "pandoc: {stderr}", "it": "pandoc: {stderr}"},
+    "err_tesseract_missing_pkg": {"en": "pytesseract is not installed: cannot run OCR (pip install 'tome2md[ocr]').", "it": "pytesseract non installato: impossibile fare OCR (pip install 'tome2md[ocr]')."},
+    "err_tesseract_missing_bin": {"en": "'tesseract' binary not found in PATH.", "it": "Binario 'tesseract' non trovato nel PATH."},
+    "err_epub_no_images": {"en": "No images found in the EPUB.", "it": "Nessuna immagine trovata nell'EPUB."},
+    "err_pages_format": {"en": "--pages requires the N-M format (e.g. 20-80)", "it": "--pages richiede il formato N-M (es. 20-80)"},
+    "err_ebook_convert_missing": {"en": "'ebook-convert' (Calibre) not found in PATH: required for {ext} files. Install Calibre: https://calibre-ebook.com/download", "it": "Binario 'ebook-convert' (Calibre) non trovato nel PATH: necessario per i file {ext}. Installa Calibre: https://calibre-ebook.com/download"},
+    "err_ebook_convert_failed": {"en": "ebook-convert: {stderr}", "it": "ebook-convert: {stderr}"},
+    "err_unsupported_format": {"en": "Unsupported format: {ext}", "it": "Formato non supportato: {ext}"},
+    "err_empty_output": {"en": "empty or too-short output", "it": "output vuoto o troppo corto"},
 }
 
 
@@ -154,25 +92,17 @@ def t(key: str, **kwargs) -> str:
 # Directories
 # --------------------------------------------------------------------------- #
 
-# New, English defaults. If the folder does not exist yet *and* the legacy
-# Italian-named one does, the legacy one is used instead -- so nothing breaks
-# for anyone already running this tool.
 _DIR_DEFAULTS = {
-    "input": ("to-convert", "libri-da-convertire"),
-    "output": ("converted", "libri-convertiti"),
-    "processed": ("originals", "file-originali-convertiti"),
+    "input": "to-convert",
+    "output": "converted",
+    "processed": "originals",
 }
 
 
 def _resolve_dir(explicit: str | None, kind: str, base: Path) -> Path:
     if explicit:
         return Path(explicit).expanduser().resolve()
-    new_name, legacy_name = _DIR_DEFAULTS[kind]
-    new_path = base / new_name
-    legacy_path = base / legacy_name
-    if not new_path.exists() and legacy_path.exists():
-        return legacy_path
-    return new_path
+    return base / _DIR_DEFAULTS[kind]
 
 
 def _rel(p: Path, base: Path) -> Path:
@@ -797,10 +727,11 @@ def main(argv=None) -> int:
     parser.add_argument("--output-dir", metavar="DIR", help="folder to write the Markdown vault to (default: converted/)")
     parser.add_argument("--processed-dir", metavar="DIR", help="folder to archive originals into (default: originals/)")
     parser.add_argument("--engine", choices=["auto", "ocr", "docling"], default="auto")
-    parser.add_argument("--ocr-lang", default="ita+eng", metavar="LANG[+LANG...]|auto",
+    parser.add_argument("--ocr-lang", default="eng", metavar="LANG[+LANG...]|auto",
                          help="Tesseract language(s) for OCR, e.g. 'eng', 'eng+fra', or 'auto' "
                               "to use every installed language pack from a common preset")
-    parser.add_argument("--ui-lang", choices=["en", "it"], default="en", help="language of console messages")
+    parser.add_argument("--ui-lang", choices=["en", "it"], default="en",
+                        help="language of console messages (default: en)")
     parser.add_argument("--pages", metavar="N-M", help="convert only this page range (for quick tests)")
     parser.add_argument("--formulas", action="store_true", help="docling: recognize formulas as LaTeX (slow)")
     parser.add_argument("--dpi", type=int, default=200, help="render resolution for OCR")

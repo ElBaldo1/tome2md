@@ -18,14 +18,6 @@ converted/*
 originals/*
 !originals/.gitkeep
 
-# Legacy Italian folder names (kept working for existing local setups)
-libri-da-convertire/*
-!libri-da-convertire/.gitkeep
-libri-convertiti/*
-!libri-convertiti/.gitkeep
-file-originali-convertiti/*
-!file-originali-convertiti/.gitkeep
-
 tempor/
 .temp_pages/
 

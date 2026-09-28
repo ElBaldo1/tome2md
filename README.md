@@ -53,7 +53,7 @@ headings, or multilingual "Chapter N" detection for plain text.
 
 ## Before / after
 
-**Input:** `libri-da-convertire/Atomic-Habits.epub` (a single 250-page file)
+**Input:** `to-convert/Atomic-Habits.epub` (a single 250-page file)
 
 **Output:**
 
@@ -105,10 +105,11 @@ actually link and query.
 | TXT / Markdown | direct | multilingual "Chapter 3" / "Capitolo 3" / "Chapitre 3" / "Kapitel 3" / "Capítulo 3" / "Hoofdstuk 3" / "Rozdział 3" heading detection |
 | Any of the above, max fidelity | `--engine docling` (opt-in) | LaTeX formulas, real tables, layout-aware — slower on CPU |
 
-OCR language is **not limited to Italian and English**: pass any Tesseract
+OCR language is not limited to English: pass any Tesseract
 language code or combination (`--ocr-lang eng+fra+deu`), or let `--ocr-lang
 auto` pick every language pack you have installed from a common preset.
-Console messages are in English by default; add `--ui-lang it` for Italian.
+Console messages and default directories use English. Add `--ui-lang it` to
+switch console messages to Italian; folder names remain English.
 
 ---
 
@@ -137,16 +138,6 @@ tome2md --keep-going               # don't stop the batch on the first failure
 ```
 
 Run `tome2md --help` for the full flag reference.
-
-### Already using the Italian folder names?
-
-If `libri-da-convertire/` / `libri-convertiti/` / `file-originali-convertiti/`
-already exist from an earlier version, `tome2md` keeps using them
-automatically — the new English names (`to-convert/` / `converted/` /
-`originals/`) only apply to fresh setups, or override either with
-`--input-dir` / `--output-dir` / `--processed-dir`.
-
----
 
 ## Installing the external tools
 
