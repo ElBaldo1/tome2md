@@ -78,6 +78,36 @@ def test_no_headings_falls_back_to_a_single_full_text_chapter(tmp_path):
     assert "wall of prose" in chapter_files[0].read_text(encoding="utf-8")
 
 
+def test_falls_back_to_epub_file_anchors_when_no_headings_exist(tmp_path):
+    # Some EPUBs style their chapter titles as plain text/links instead of
+    # real <h1>-<h6> tags; Pandoc then emits no ATX headings at all, but it
+    # still preserves one anchor per source XHTML file, which this fallback
+    # uses as the chapter boundary instead of dumping everything into one
+    # "Full text" note.
+    md = (
+        '<span id="Frontmatter.xhtml"></span>\n\n'
+        '<div id="Frontmatter.xhtml_kfm1" class="section frontmatter" title="Foreword">\n\n'
+        "Filler words for the foreword section so it clears the merge threshold easily.\n\n"
+        "</div>\n\n"
+        '<span id="Chapter001.xhtml"></span>\n\n'
+        "[Chapter One](#toc)\n\n"
+        "Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda plenty more filler.\n\n"
+        '<span id="Chapter002.xhtml"></span>\n\n'
+        "[Chapter Two](#toc)\n\n"
+        "Unique marker word ZORB appears only here and must survive the split untouched."
+    )
+    folder = tmp_path / "book"
+    n = split_into_chapters(md, "Anchor Book", folder, min_words=5)
+
+    assert n == 3
+    index = (folder / "00_Index.md").read_text(encoding="utf-8")
+    assert "Foreword" in index
+    assert "Chapter 1" in index
+    assert "Chapter 2" in index
+    all_text = "\n".join(p.read_text(encoding="utf-8") for p in folder.glob("*.md"))
+    assert "ZORB" in all_text
+
+
 def test_frontmatter_is_present_and_escapes_quotes(tmp_path):
     md = '# It\'s "Complicated"\n\nEnough filler words to clear the threshold easily right here.'
     folder = tmp_path / "book"

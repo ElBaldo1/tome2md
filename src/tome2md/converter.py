@@ -194,6 +194,55 @@ def promote_chapter_lines(text: str) -> str:
 
 _H_RE = re.compile(r"^(#{1,6})\s+(\S.*?)(?:\s+#+)?\s*$")
 
+# Pandoc's EPUB reader preserves each source XHTML file's own anchor verbatim
+# - a bare ``<span id="Chapter1.xhtml"></span>`` or a ``<div id="..." ...>``
+#   - when that file's own markup doesn't map onto a Markdown heading (books
+# whose chapter titles are styled text/links instead of real <h1>-<h6> tags).
+# These anchors still mark one boundary per source file, so they're a
+# reliable fallback split point when no ATX heading is found at all.
+_EPUB_ANCHOR_RE = re.compile(r'^<(div|span) id="([A-Za-z_]+?)(\d*)\.xhtml[^"]*"([^>]*)>(?:</span>)?\s*$')
+_EPUB_TITLE_ATTR_RE = re.compile(r'\btitle="([^"]*)"')
+
+
+def _epub_anchor_title(word: str, digits: str, attrs: str) -> str:
+    m = _EPUB_TITLE_ATTR_RE.search(attrs)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    label = word.replace("_", " ").strip()
+    return f"{label} {int(digits)}" if digits else label
+
+
+def _split_on_epub_anchors(lines: list[str]) -> list[tuple[str, list[str]]] | None:
+    markers: list[tuple[int, str, str]] = []
+    for i, line in enumerate(lines):
+        m = _EPUB_ANCHOR_RE.match(line)
+        if not m:
+            continue
+        stem = m.group(2) + m.group(3)
+        markers.append((i, stem, _epub_anchor_title(m.group(2), m.group(3), m.group(4))))
+
+    # A bare span and a titled div for the same source file both appear a
+    # couple of lines apart; collapse them into a single boundary, keeping
+    # whichever of the two carries the real title.
+    boundaries: list[tuple[int, str]] = []
+    prev_stem = None
+    prev_idx = None
+    for i, stem, title in markers:
+        if boundaries and prev_stem == stem and i - prev_idx <= 5:
+            boundaries[-1] = (boundaries[-1][0], title)
+        else:
+            boundaries.append((i, title))
+        prev_stem, prev_idx = stem, i
+
+    if len(boundaries) < 2:
+        return None
+
+    sections: list[tuple[str, list[str]]] = []
+    for idx, (start, title) in enumerate(boundaries):
+        end = boundaries[idx + 1][0] if idx + 1 < len(boundaries) else len(lines)
+        sections.append((title, lines[start + 1 : end]))
+    return sections
+
 
 def split_into_chapters(markdown: str, book_title: str, book_folder: Path, *, min_words: int) -> int:
     """Split on the top heading level that yields >=2 sections; merge tiny ones forward."""
@@ -211,7 +260,7 @@ def split_into_chapters(markdown: str, book_title: str, book_folder: Path, *, mi
 
     sections: list[tuple[str, list[str]]] = []
     if split_level is None:
-        sections.append(("Full text", lines))
+        sections = _split_on_epub_anchors(lines) or [("Full text", lines)]
     else:
         current_title, buf = "Preamble", []
         for ln in lines:
@@ -542,7 +591,7 @@ def pdf_ocr_to_markdown(doc, *, dpi: int, workers: int, lang: str, page_range=No
     for i in tqdm(rng, desc="Rendering PDF", unit="page"):
         pix = doc[i].get_pixmap(dpi=dpi)
         images.append(_grayscale_downscale(Image.frombytes("RGB", [pix.width, pix.height], pix.samples)))
-    return normalize_text(_ocr_images(images, workers, lang))
+    return normalize_text(promote_chapter_lines(_ocr_images(images, workers, lang)))
 
 
 def epub_images_to_markdown(epub_path: Path, workers: int, lang: str) -> str:
@@ -553,7 +602,7 @@ def epub_images_to_markdown(epub_path: Path, workers: int, lang: str) -> str:
             images.append(_grayscale_downscale(Image.open(io.BytesIO(archive.read(name)))))
     if not images:
         raise RuntimeError(t("err_epub_no_images"))
-    return normalize_text(_ocr_images(images, workers, lang))
+    return normalize_text(promote_chapter_lines(_ocr_images(images, workers, lang)))
 
 
 # --------------------------------------------------------------------------- #

@@ -74,6 +74,12 @@ Every chapter note carries real frontmatter (`book`, `chapter`, `order`,
 Obsidian Dataview from day one, and `00_Index.md` links every chapter with a
 `[[wikilink]]` so the whole book is navigable without leaving Obsidian.
 
+<p align="center">
+<img src="docs/screenshot-graph.png" alt="Rich Dad Poor Dad, converted by tome2md and opened in Obsidian's graph view: one hub note (00_Index) linked to every real chapter" width="800" />
+</p>
+
+<p align="center"><em>Real example: <a href="https://en.wikipedia.org/wiki/Rich_Dad_Poor_Dad">Rich Dad Poor Dad</a> converted from EPUB and opened in Obsidian's graph view — every chapter is its own linked note.</em></p>
+
 ---
 
 ## How it compares
